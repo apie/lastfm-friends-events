@@ -1,0 +1,5 @@
+requests-html
+lxml_html_clean
+requests-cache
+typer
+pytz
