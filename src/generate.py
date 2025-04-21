@@ -1,58 +1,81 @@
 #!/usr/bin/env python3
 # Scrape lastfm user event page
 # By Apie
-# 2024-01-25
-import typer
-from requests_html import HTMLSession
-from lxml import etree
+# 2025-04-18
 
+import time
+import random
+import logging
 from os import path
 from pathlib import Path
 from sys import argv
 from datetime import timedelta, datetime
 from typing import List, Set
+from urllib.parse import urljoin, urlparse
+
 import pytz
-
-timezone = "Europe/Amsterdam"
-
+import typer
 import requests_cache
-
-from requests_cache import CacheMixin, install_cache
-
-from requests_html import HTMLSession
+from lxml import etree
+from requests_html import HTML, HTMLSession
 
 
-class CachedHTMLSession(CacheMixin, HTMLSession):
-    """Session with features from both CachedSession and HTMLSession"""
+logger = logging.getLogger(__name__)
 
-
+ONE_HOUR = 60 * 60
+ONE_DAY = ONE_HOUR * 24
+ONE_YEAR = ONE_DAY * 365
 urls_expire_after = {
-    "*": 60 * 60 * 24 * 5,
-    # cache friends longer than events
+    "*": ONE_DAY * 5,
     # cache if friend is still scrobbling/active
+    "https://www.last.fm/user/*/listening-report/year": ONE_YEAR * 99,
 }
-session = CachedHTMLSession(
-    "lfm-friends-events-cache", urls_expire_after=urls_expire_after
+session = requests_cache.CachedSession(
+    "lfm-friends-events-cache",
+    urls_expire_after=urls_expire_after,
 )
 
 
-def get_events(username: str):
-    import time
-    import random
+def user_is_active(username: str) -> bool:
+    url = f"https://www.last.fm/user/{username}/listening-report/year"
+    logger.debug(f"getting {url}")
+    r = session.get(
+        url, headers={"User-Agent": "Firefox", "Cookie": "hallo=1"}
+    )  # Force cookie header so we have idential cookies every time and the request can be cached.
+    r.raise_for_status()
+    logger.debug(f"{r.from_cache=}")
+    if not r.from_cache:
+        noise = random.randint(1, 100)
+        sleeping = random.randint(0, 3) + (noise / 100)
+        logger.debug(f"{sleeping=}")
+        # Give the last.fm site some rest and prevent rate limiting
+        time.sleep(sleeping)
+    html = HTML(html=r.content)
+    text = html.search("Nothing to report")
+    if not text:
+        return True
 
-    noise = random.randint(1, 100)
-    time.sleep(3 + (noise / 100))
+
+def get_events(username: str):
     # No year means upcoming events
     url = f"https://www.last.fm/user/{username}/events"
-    r = session.get(url, headers={"User-Agent": "Firefox"})
-    print(r.__dict__.keys())
-    print(f"{r.from_cache=}")
+    logger.debug(f"getting {url}")
+    r = session.get(
+        url, headers={"User-Agent": "Firefox", "Cookie": "hallo=1"}
+    )  # Force cookie header so we have idential cookies every time and the request can be cached.
     r.raise_for_status()
+    logger.debug(f"{r.from_cache=}")
+    if not r.from_cache:
+        noise = random.randint(1, 100)
+        sleeping = random.randint(0, 3) + (noise / 100)
+        logger.debug(f"{sleeping=}")
+        # Give the last.fm site some rest and prevent rate limiting
+        time.sleep(sleeping)
+    html = HTML(html=r.content)
     try:
-        events = r.html.find("tr.events-list-item")
+        events = html.find("tr.events-list-item")
     except e:
-        print(e)
-        return
+        return print(e)
     for event in events:
         datetimestr = event.find("time", first=True).attrs.get("datetime")
         link = "https://www.last.fm" + event.find(
@@ -67,35 +90,24 @@ def get_events(username: str):
         yield date_obj, link, title, lineup, location
 
 
-from urllib.parse import urljoin, urlparse
-
-
 def get_user_list(url: str) -> Set[str]:
     following = set()
-    print(f"getting {url}")
-    # next_available = True
-    # page_number = 1
-
-    # print(f"{page_number=}")
-    r = session.get(url)
+    logger.debug(f"getting {url}")
+    r = session.get(
+        url, headers={"User-Agent": "Firefox", "Cookie": "hallo=1"}
+    )  # Force cookie header so we have idential cookies every time and the request can be cached.
     r.raise_for_status()
-    for followinger in r.html.find("li.user-list-item.link-block"):
+    logger.debug(f"{r.from_cache=}")
+    html = HTML(html=r.content)
+    for followinger in html.find("li.user-list-item.link-block"):
         name = followinger.find(".user-list-name", first=True).text
-        # print(name)
         following.add(name)
-    next_elem = r.html.find("li.pagination-next a", first=True)
-    # print(following)
+    next_elem = html.find("li.pagination-next a", first=True)
     if next_elem:
         next_page = next_elem.attrs.get("href")
-        print(next_page)
         base_url = urljoin(url, urlparse(url).path)
-        print(base_url)
         new_followers = get_user_list(base_url + next_page)
         following.update(new_followers)
-        print(len(following))
-    # raise NotImplementedError()
-    print("final")
-    print(len(following))
     return following
 
 
@@ -109,29 +121,31 @@ def get_following(username: str) -> Set[str]:
     return get_user_list(url)
 
 
-def get_friends(username: str) -> List[str]:
+def get_friends(username: str, friends_only: bool) -> List[str]:
     # Friends = people who are in both your 'followers' and 'following'
-    # return ['onemoregirl']
     following = get_following(username)
-    # import pdb;pdb.set_trace()
     followers = get_followers(username)
-    # print(followers.intersection(following))
-    # import pdb; pdb.set_trace()
-    return followers.intersection(following)
+    if friends_only:
+        # Return only people that are in both sets. You follow them and they follow you back.
+        return followers.intersection(following)
+    # Return both followers and following
+    return followers.union(following)
 
 
-def print_events(username: str):
-    for friend in get_friends(username):
-        print(friend)
-        # TODO if friend is still active
+def print_events(username: str, friends_only: bool = False, debug: bool = False):
+    if debug:
+        logging.basicConfig(level="DEBUG")
+    for friend in sorted(get_friends(username, friends_only), key=lambda x: x.lower()):
+        if not user_is_active(friend):
+            logger.debug(f"Skipping inactive user {friend}")
+            continue
         for i, event in enumerate(get_events(friend)):
             if not event:
                 continue
             if i > 2:
-                continue
+                continue  # Only print first three events friend is going to.
             date_obj, link, title, lineup, location = event
-            print(f"- {date_obj=} {link=} {title=} {lineup=} {location=}")
-        print("")
+            print(f"{friend}: {title} on {date_obj} {link=}")
 
 
 if __name__ == "__main__":
