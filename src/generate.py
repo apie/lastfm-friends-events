@@ -38,10 +38,15 @@ session = CachedHTMLSession(
 
 def get_events(username: str):
     import time
-    time.sleep(3)
+    import random
+
+    noise = random.randint(1, 100)
+    time.sleep(3 + (noise / 100))
     # No year means upcoming events
     url = f"https://www.last.fm/user/{username}/events"
-    r = session.get(url, headers={'User-Agent': 'Firefox'})
+    r = session.get(url, headers={"User-Agent": "Firefox"})
+    print(r.__dict__.keys())
+    print(f"{r.from_cache=}")
     r.raise_for_status()
     try:
         events = r.html.find("tr.events-list-item")
@@ -61,31 +66,54 @@ def get_events(username: str):
         date_obj = datetime.fromisoformat(datetimestr).date()
         yield date_obj, link, title, lineup, location
 
+
+from urllib.parse import urljoin, urlparse
+
+
 def get_user_list(url: str) -> Set[str]:
-    # TODO pagination
+    following = set()
+    print(f"getting {url}")
+    # next_available = True
+    # page_number = 1
+
+    # print(f"{page_number=}")
     r = session.get(url)
     r.raise_for_status()
-    following = set()
     for followinger in r.html.find("li.user-list-item.link-block"):
         name = followinger.find(".user-list-name", first=True).text
-        print(name)
+        # print(name)
         following.add(name)
+    next_elem = r.html.find("li.pagination-next a", first=True)
+    # print(following)
+    if next_elem:
+        next_page = next_elem.attrs.get("href")
+        print(next_page)
+        base_url = urljoin(url, urlparse(url).path)
+        print(base_url)
+        new_followers = get_user_list(base_url + next_page)
+        following.update(new_followers)
+        print(len(following))
     # raise NotImplementedError()
-    print(following)
+    print("final")
+    print(len(following))
     return following
+
 
 def get_followers(username: str) -> Set[str]:
     url = f"https://www.last.fm/user/{username}/followers"
     return get_user_list(url)
 
+
 def get_following(username: str) -> Set[str]:
     url = f"https://www.last.fm/user/{username}/following"
     return get_user_list(url)
+
 
 def get_friends(username: str) -> List[str]:
     # Friends = people who are in both your 'followers' and 'following'
     # return ['onemoregirl']
     following = get_following(username)
+    # import pdb;pdb.set_trace()
     followers = get_followers(username)
     # print(followers.intersection(following))
     # import pdb; pdb.set_trace()
