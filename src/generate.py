@@ -117,8 +117,8 @@ def get_friends(username: str, friends_only: bool) -> Set[str]:
     if friends_only:
         # Return only people that are in both sets. You follow them and they follow you back.
         return followers.intersection(following)
-    # Return both followers and following
-    return followers.union(following)
+    # Return following
+    return following
 
 
 def print_events(username: str, friends_only: bool = False, debug: bool = False):
