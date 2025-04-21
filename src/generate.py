@@ -54,7 +54,10 @@ def get_url_as_html(url: str) -> HTML:
 
 def user_is_active(username: str) -> bool:
     url = f"https://www.last.fm/user/{username}/listening-report/year"
-    html = get_url_as_html(url)
+    try:
+        html = get_url_as_html(url)
+    except:
+        return False
     text = html.search("Nothing to report")
     if not text:
         return True
