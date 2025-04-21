@@ -10,7 +10,7 @@ from os import path
 from pathlib import Path
 from sys import argv
 from datetime import timedelta, datetime
-from typing import List, Set
+from typing import Set, Iterable, Tuple
 from urllib.parse import urljoin, urlparse
 
 import pytz
@@ -36,8 +36,7 @@ session = requests_cache.CachedSession(
 )
 
 
-def user_is_active(username: str) -> bool:
-    url = f"https://www.last.fm/user/{username}/listening-report/year"
+def get_url_as_html(url: str) -> HTML:
     logger.debug(f"getting {url}")
     r = session.get(
         url, headers={"User-Agent": "Firefox", "Cookie": "hallo=1"}
@@ -50,28 +49,21 @@ def user_is_active(username: str) -> bool:
         logger.debug(f"{sleeping=}")
         # Give the last.fm site some rest and prevent rate limiting
         time.sleep(sleeping)
-    html = HTML(html=r.content)
+    return HTML(html=r.content)
+
+
+def user_is_active(username: str) -> bool:
+    url = f"https://www.last.fm/user/{username}/listening-report/year"
+    html = get_url_as_html(url)
     text = html.search("Nothing to report")
     if not text:
         return True
 
 
-def get_events(username: str):
+def get_events(username: str) -> Iterable[Tuple]:
     # No year means upcoming events
     url = f"https://www.last.fm/user/{username}/events"
-    logger.debug(f"getting {url}")
-    r = session.get(
-        url, headers={"User-Agent": "Firefox", "Cookie": "hallo=1"}
-    )  # Force cookie header so we have idential cookies every time and the request can be cached.
-    r.raise_for_status()
-    logger.debug(f"{r.from_cache=}")
-    if not r.from_cache:
-        noise = random.randint(1, 100)
-        sleeping = random.randint(0, 3) + (noise / 100)
-        logger.debug(f"{sleeping=}")
-        # Give the last.fm site some rest and prevent rate limiting
-        time.sleep(sleeping)
-    html = HTML(html=r.content)
+    html = get_url_as_html(url)
     try:
         events = html.find("tr.events-list-item")
     except e:
@@ -90,15 +82,9 @@ def get_events(username: str):
         yield date_obj, link, title, lineup, location
 
 
-def get_user_list(url: str) -> Set[str]:
+def get_user_set(url: str) -> Set[str]:
     following = set()
-    logger.debug(f"getting {url}")
-    r = session.get(
-        url, headers={"User-Agent": "Firefox", "Cookie": "hallo=1"}
-    )  # Force cookie header so we have idential cookies every time and the request can be cached.
-    r.raise_for_status()
-    logger.debug(f"{r.from_cache=}")
-    html = HTML(html=r.content)
+    html = get_url_as_html(url)
     for followinger in html.find("li.user-list-item.link-block"):
         name = followinger.find(".user-list-name", first=True).text
         following.add(name)
@@ -106,22 +92,22 @@ def get_user_list(url: str) -> Set[str]:
     if next_elem:
         next_page = next_elem.attrs.get("href")
         base_url = urljoin(url, urlparse(url).path)
-        new_followers = get_user_list(base_url + next_page)
+        new_followers = get_user_set(base_url + next_page)
         following.update(new_followers)
     return following
 
 
 def get_followers(username: str) -> Set[str]:
     url = f"https://www.last.fm/user/{username}/followers"
-    return get_user_list(url)
+    return get_user_set(url)
 
 
 def get_following(username: str) -> Set[str]:
     url = f"https://www.last.fm/user/{username}/following"
-    return get_user_list(url)
+    return get_user_set(url)
 
 
-def get_friends(username: str, friends_only: bool) -> List[str]:
+def get_friends(username: str, friends_only: bool) -> Set[str]:
     # Friends = people who are in both your 'followers' and 'following'
     following = get_following(username)
     followers = get_followers(username)
